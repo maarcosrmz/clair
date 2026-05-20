@@ -1,0 +1,142 @@
+#include "./wdata.hpp"
+#include "clu/fullqualifiedname.hpp"
+#include "utility/logger.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <unordered_map>
+
+// ------------------------------
+
+// Deduplicate by IR signature (qualified_name + param types).
+// When the same function appears multiple times (redeclarations), keep the one with defaults.
+// fnt_info_t is trivially copyable (all raw pointers/bools), so direct copy is used throughout.
+std::vector<fnt_info_t> make_unique_decls(std::vector<fnt_info_t> const &flist) {
+  std::unordered_map<std::string, size_t> seen; // sig -> index in result
+  std::vector<fnt_info_t> res;
+  seen.reserve(flist.size());
+  res.reserve(flist.size());
+
+  for (auto const &f : flist) {
+    if (not f.ptr) continue;
+    auto sig        = f.ptr->qualified_name + "(" + f.ptr->param_types_str() + ")";
+    auto [it, inserted] = seen.emplace(sig, res.size());
+    if (inserted) {
+      res.push_back(f);
+    } else {
+      bool new_has = std::ranges::any_of(f.ptr->params, [](auto const &p) { return p.has_default; });
+      bool cur_has = std::ranges::any_of(res[it->second].ptr->params, [](auto const &p) { return p.has_default; });
+      if (new_has and not cur_has) res[it->second] = f;
+    }
+  }
+  return res;
+}
+
+// ------------------------------
+
+// Parse one line of a .wrap.hxx file and return the type name inside
+//   template <> constexpr bool c2py::is_wrapped<TYPE> = true;
+// Returns empty string on no match.
+static std::string extract_is_wrapped_type(std::string const &line) {
+  static constexpr std::string_view prefix = "c2py::is_wrapped<";
+  auto start = line.find(prefix);
+  if (start == std::string::npos) return {};
+  start += prefix.size();
+  auto eq = line.find("= true", start);
+  if (eq == std::string::npos) return {};
+  auto close = line.rfind('>', eq);
+  if (close == std::string::npos || close < start) return {};
+  return util::trim(line.substr(start, close - start));
+}
+
+// ------------------------------
+
+fnt_ptr_t module_info_t::intern(ir::FunctionDecl f) {
+  fnt_pool.push_back(std::make_unique<ir::FunctionDecl>(std::move(f)));
+  return fnt_pool.back().get();
+}
+
+cls_ptr_t module_info_t::intern(ir::RecordDecl f) {
+  rec_pool.push_back(std::make_unique<ir::RecordDecl>(std::move(f)));
+  return rec_pool.back().get();
+}
+
+field_ptr_t module_info_t::intern(ir::FieldDecl f) {
+  field_pool.push_back(std::make_unique<ir::FieldDecl>(std::move(f)));
+  return field_pool.back().get();
+}
+
+enum_ptr_t module_info_t::intern(ir::EnumDecl f) {
+  enum_pool.push_back(std::make_unique<ir::EnumDecl>(std::move(f)));
+  return enum_pool.back().get();
+}
+
+// ------------------------------
+
+void module_info_t::add_class(std::string_view name, clang::CXXRecordDecl const *cls) {
+  auto fqn = clu::get_fully_qualified_name(cls->getCanonicalDecl());
+  if (classes_fqn_to_info.contains(fqn)) return; // already registered
+  auto *raw = intern(ir::RecordDecl{*cls->getCanonicalDecl()});
+  long idx  = long(classes.size());
+  classes.emplace_back(name, cls_info_t{.ptr = raw});
+  classes_ptr_to_info[raw] = idx;
+  classes_fqn_to_info[fqn] = idx;
+}
+
+// ------------------------------
+
+cls_ptr_t module_info_t::get_wrapped_cls(clang::QualType ty) const {
+  clang::CXXRecordDecl const *cls = ty->getAsCXXRecordDecl();
+  if (!cls) cls = ty->getPointeeCXXRecordDecl();
+  if (!cls) return nullptr;
+  auto fqn = clu::get_fully_qualified_name(cls->getCanonicalDecl());
+  if (auto it = classes_fqn_to_info.find(fqn); it != classes_fqn_to_info.end())
+    return classes[it->second].second.ptr;
+  return nullptr;
+}
+
+// ------------------------------
+
+cls_info_t *module_info_t::get_wrapped_cls_info(clang::QualType ty) {
+  clang::CXXRecordDecl const *cls = ty->getAsCXXRecordDecl();
+  if (!cls) cls = ty->getPointeeCXXRecordDecl();
+  if (!cls) return nullptr;
+  auto fqn = clu::get_fully_qualified_name(cls->getCanonicalDecl());
+  if (auto it = classes_fqn_to_info.find(fqn); it != classes_fqn_to_info.end())
+    return &classes[it->second].second;
+  return nullptr;
+}
+
+// ------------------------------
+
+bool module_info_t::is_wrapped(clang::QualType ty) const { return get_wrapped_cls(ty) != nullptr; }
+
+// ------------------------------
+
+wdata_t::wdata_t(clang::CompilerInstance *ci, configuration const &config) : ci{ci}, config{config} {
+
+  auto p                           = std::filesystem::absolute(ci->getFrontendOpts().Inputs[0].getFile().str());
+  module_info.sourcefile           = str_t{p.string()};
+  module_info.module_name          = str_t{p.stem()};
+  module_info.sourcefile_full_stem = p.parent_path() / p.stem();
+  module_info.package_name         = config.package_name;
+  module_info.documentation        = config.documentation;
+
+  util::logger::set_log(module_info.sourcefile_full_stem + ".log");
+
+  if (not config.reject_names.empty()) this->reject_names = llvm::Regex(config.reject_names);
+
+  // Scan .wrap.hxx files in the source directory to build the type -> header table.
+  // Each .wrap.hxx generated by clair for another module contains a line like:
+  //   template <> constexpr bool c2py::is_wrapped<my_ns::Foo> = true;
+  std::error_code ec;
+  for (auto const &entry : std::filesystem::directory_iterator(p.parent_path(), ec)) {
+    if (!entry.path().string().ends_with(".wrap.hxx")) continue;
+    std::ifstream hf(entry.path());
+    std::string line;
+    while (std::getline(hf, line)) {
+      if (auto type_name = extract_is_wrapped_type(line); !type_name.empty())
+        wrapped_type_to_header.emplace(std::move(type_name), entry.path().filename().string());
+    }
+  }
+}
