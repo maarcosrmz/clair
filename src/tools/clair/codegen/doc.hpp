@@ -1,11 +1,6 @@
 #pragma once
-<<<<<<<< HEAD:src/tools/clair/codegen/doc.hpp
 #include "../module_info.hpp"
 #include "utility/string_tools.hpp"
-========
-#include "../clair-c2py/wdata.hpp"
-#include "../../utility/string_tools.hpp"
->>>>>>>> 6bfefe1 (Extract codegen out of clair-c2py into a shared directory):src/tools/codegen/doc.hpp
 
 #include <tuple>
 #include <vector>

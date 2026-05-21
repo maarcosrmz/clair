@@ -13,7 +13,7 @@
 // Returns empty string on no match.
 static std::string extract_is_wrapped_type(std::string const &line) {
   static constexpr std::string_view prefix = "c2py::is_wrapped<";
-  auto start                               = line.find(prefix);
+  auto start = line.find(prefix);
   if (start == std::string::npos) return {};
   start += prefix.size();
   auto eq = line.find("= true", start);
@@ -43,7 +43,6 @@ bool wdata_t::is_wrapped_in_module(clang::QualType ty) const {
 }
 
 // ------------------------------
-
 
 wdata_t::wdata_t(clang::CompilerInstance *ci, configuration const &config) : ci{ci}, config{config} {
 

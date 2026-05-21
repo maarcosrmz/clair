@@ -1,10 +1,6 @@
 #include <algorithm>
 #include "fnt.hpp"
 #include "./utils.hpp"
-<<<<<<<< HEAD:src/tools/clair/codegen/fnt.cpp
-========
-#include "../clair-c2py/wdata.hpp"
->>>>>>>> 6bfefe1 (Extract codegen out of clair-c2py into a shared directory):src/tools/codegen/fnt.cpp
 #include <fmt/core.h>
 #include <fmt/format.h>
 using namespace fmt::literals;

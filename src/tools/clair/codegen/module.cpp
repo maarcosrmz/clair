@@ -8,11 +8,6 @@ using namespace fmt::literals;
 #include "utility/logger.hpp"
 #include "./fnt.hpp"
 #include "./classes.hpp"
-<<<<<<<< HEAD:src/tools/clair/codegen/module.cpp
-#include "../c2py/c2py_version.hpp"
-========
-#include "../clair-c2py/c2py_version.hpp"
->>>>>>>> 6bfefe1 (Extract codegen out of clair-c2py into a shared directory):src/tools/codegen/module.cpp
 
 using util::join;
 

@@ -13,7 +13,6 @@
 #include "clu/concept.hpp"
 #include "utility/string_tools.hpp"
 
-
 // ----------------------- wdata_t ------------------------------------
 // Per-translation-unit working state: compiler instance, configuration, resolved concepts, and collected module data.
 struct wdata_t {
