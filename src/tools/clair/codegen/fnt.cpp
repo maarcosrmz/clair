@@ -76,6 +76,31 @@ void codegen::write_dispatch(std::ostream &code, std::ostream &table, std::ostre
     logs.fun_c(fmt::format("{0}({1})", fname_log, fnt_param_with_types(ir)));
 
     if (f_info.rewrite) {
+      if (has_parent and not ir.is_static and not ir.linkage_name.empty()) {
+        auto fortran_args = join(ir.params, [](auto const &p) -> str_t {
+          bool by_ptr = !p.is_fortran_value && p.type.name.find('*') == str_t::npos;
+          return by_ptr ? "&" + p.name : p.name;
+        }, ", ");
+        str_t fa_sep = fortran_args.empty() ? "" : ", " + fortran_args;
+        if (ir.self_is_polymorphic) // CLASS(T)/CLASS(*) -> requires void **
+          return fmt::format(
+            R"RAW( c2py::cmethod([]({0} & self {1} {2}) -> decltype(auto) {{ void *_base = &self; return ::{3}(&_base{4}); }}, "self" {1} {5}))RAW",
+            parent_cls_name, comma_if(args), fnt_param_with_types(ir), ir.linkage_name, fa_sep, args);
+        else // TYPE(T) -> void *
+          return fmt::format(
+            R"RAW( c2py::cmethod([]({0} & self {1} {2}) -> decltype(auto) {{ return ::{3}(&self{4}); }}, "self" {1} {5}))RAW",
+            parent_cls_name, comma_if(args), fnt_param_with_types(ir), ir.linkage_name, fa_sep, args);
+      }
+
+      if (not has_parent and not ir.linkage_name.empty()) {
+        auto fortran_args = join(ir.params, [](auto const &p) -> str_t {
+          bool by_ptr = !p.is_fortran_value && p.type.name.find('*') == str_t::npos;
+          return by_ptr ? "&" + p.name : p.name;
+        }, ", ");
+        return fmt::format(R"RAW( c2py::cfun([]({}) {{ return ::{}({}); }} {} {}))RAW",
+                           fnt_param_with_types(ir), ir.linkage_name, fortran_args, comma_if(args), args);
+      }
+
       auto targs_suffix = ir.is_template_instantiation ? "<" + fnt_tparams(ir) + ">" : "";
       auto call_name    = has_parent and not ir.is_static
                             ? std::string{ir.is_template_instantiation ? "self.template " : "self."} + ir.simple_name + targs_suffix
